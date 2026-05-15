@@ -31,7 +31,7 @@ async def get_route(data: dict):
             [f"{lng},{lat}" for lng, lat in coordinates]
         )
 
-        url = f"https://router.project-osrm.org/route/v1/driving/{coordinate_string}?overview=full&geometries=geojson"
+        url = f"https://router.project-osrm.org/route/v1/driving/{coordinate_string}?overview=full&geometries=geojson&alternatives=true&steps=true"
 
         response = requests.get(
             url,
@@ -47,22 +47,24 @@ async def get_route(data: dict):
                 "error": "No routes found"
             }
 
-        route = osrm_data["routes"][0]
+        routes = []
 
-        return {
-            "features": [
-                {
-                    "geometry": {
-                        "coordinates": route["geometry"]["coordinates"]
-                    },
-                    "properties": {
-                        "summary": {
-                            "distance": route["distance"],
-                            "duration": route["duration"]
-                        }
+        for route in osrm_data["routes"]:
+
+            routes.append({
+                "geometry": {
+                    "coordinates": route["geometry"]["coordinates"]
+                },
+                "properties": {
+                    "summary": {
+                        "distance": route["distance"],
+                        "duration": route["duration"]
                     }
                 }
-            ]
+            })
+
+        return {
+            "features": routes
         }
 
     except Exception as e:

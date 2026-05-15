@@ -27,6 +27,12 @@ import "leaflet/dist/leaflet.css";
 
 import debounce from "lodash/debounce";
 
+import {
+  DragDropContext,
+  Droppable,
+  Draggable,
+} from "@hello-pangea/dnd";
+
 // ROUTE COLORS
 
 const routeColors = [
@@ -91,93 +97,116 @@ function getPriorityValue(
 
 function optimizeRoute(
   stops,
-  startPoint
+  startPoint,
+  routeMode
 ) {
 
   if (stops.length <= 1)
     return stops;
 
-  // SORT BY PRIORITY FIRST
+  let optimized = [];
 
-  const sortedStops =[...stops];
+  // =========================
+  // SHORTEST
+  // =========================
 
-  const remaining =
-    [...sortedStops];
+  if (routeMode === "shortest") {
 
-  const optimized = [];
+    const remaining = [...stops];
 
-  let current;
-
-  // START POINT EXISTS
-
-  if (startPoint) {
-
-    current = startPoint;
-
-  }
-
-  else {
-
-    current =
-      remaining.shift();
+    let current =
+      startPoint || remaining.shift();
 
     if (!startPoint) {
       optimized.push(current);
     }
-  }
 
-  while (
-    remaining.length > 0
-  ) {
+    while (remaining.length > 0) {
 
-    let nearestIndex = 0;
+      let nearestIndex = 0;
 
-    let nearestDistance =
-      calculateDistance(
-        current,
-        remaining[0]
-      );
-
-    for (
-      let i = 1;
-      i < remaining.length;
-      i++
-    ) {
-
-      const distance =
+      let nearestDistance =
         calculateDistance(
           current,
-          remaining[i]
+          remaining[0]
         );
 
-      if (
-        distance <
-        nearestDistance
-      ) {
+      for (let i = 1; i < remaining.length; i++) {
 
-        nearestDistance =
-          distance;
+        const distance =
+          calculateDistance(
+            current,
+            remaining[i]
+          );
 
-        nearestIndex = i;
+        if (distance < nearestDistance) {
+
+          nearestDistance = distance;
+          nearestIndex = i;
+        }
       }
+
+      const nearest =
+        remaining.splice(nearestIndex, 1)[0];
+
+      optimized.push(nearest);
+
+      current = nearest;
     }
 
-    const nearestStop =
-      remaining.splice(
-        nearestIndex,
-        1
-      )[0];
-
-    optimized.push(
-      nearestStop
-    );
-
-    current =
-      nearestStop;
+    return optimized;
   }
 
-  return optimized;
+  // =========================
+  // PRIORITY
+  // =========================
+
+  if (routeMode === "priority") {
+
+    return [...stops].sort(
+      (a, b) =>
+        getPriorityValue(a.priority) -
+        getPriorityValue(b.priority)
+    );
+  }
+
+  // =========================
+  // BALANCED
+  // =========================
+
+  if (routeMode === "balanced") {
+
+    return [...stops].sort((a, b) => {
+
+      const priorityScore =
+        getPriorityValue(a.priority) -
+        getPriorityValue(b.priority);
+
+      const distanceScore =
+        calculateDistance(startPoint || a, a) -
+        calculateDistance(startPoint || b, b);
+
+      return (
+        priorityScore * 0.5 +
+        distanceScore * 0.5
+      );
+    });
+  }
+
+  // =========================
+  // FASTEST
+  // =========================
+
+  if (routeMode === "fastest") {
+
+    return [...stops].sort(
+      () => Math.random() - 0.5
+    );
+  }
+
+  return stops;
 }
+
 // CLUSTER VEHICLES
 
 function clusterStopsIntoVehicles(
@@ -433,7 +462,7 @@ function ORSRoute({
   setLoading,
 }) {
 
-  const [positions, setPositions] = useState([]);
+  const [positions, setPositions] = useState([[]]);
 
   const previousPointsRef = useRef("");
 
@@ -501,17 +530,19 @@ function ORSRoute({
           return;
         }
 
-        const geometry =
-          data.features[0]
-            .geometry.coordinates;
+        const allRoutes =
+          data.features.map(feature => {
 
-        const converted =
-          geometry.map(coord => [
-            coord[1],
-            coord[0],
-          ]);
+            return feature.geometry.coordinates.map(
+              coord => [
+                coord[1],
+                coord[0]
+              ]
+            );
 
-        setPositions(converted);
+          });
+
+        setPositions(allRoutes);
 
         const summary =
           data.features[0]
@@ -552,19 +583,22 @@ function ORSRoute({
   ]);
 
   return (
+    <>
+      {positions.map((route, index) => (
 
-  positions.length > 0 ? (
+        <Polyline
+          key={index}
+          positions={route}
+          pathOptions={{
+            color: index === 0 ? color : "#94a3b8",
+            weight: index === 0 ? 5 : 3,
+            opacity: index === 0 ? 1 : 0.5,
+          }}
+        />
 
-    <Polyline
-      positions={positions}
-      pathOptions={{
-        color,
-        weight: 4,
-      }}
-    />
-
-  ) : null
-);
+      ))}
+    </>
+  );
 }
 // MAIN APP
 
@@ -632,8 +666,88 @@ function App() {
   setRoundTrip,
   ] = useState(false);
 
-  const [loading, setLoading] = useState(false);
+  const [
+  loading, 
+  setLoading,
+  ] = useState(false);
 
+  const [
+  routeOptions,
+  setRouteOptions,
+  ] = useState([]);
+
+  const [
+  selectedRouteOption,
+  setSelectedRouteOption,
+  ] = useState("shortest");
+
+  const [
+  manualRoutes,
+  setManualRoutes,
+  ] = useState([]);
+
+function handleDragEnd(result) {
+
+  if (!result.destination)
+    return;
+
+  const sourceVehicle =
+    parseInt(result.source.droppableId);
+
+  const destinationVehicle =
+    parseInt(result.destination.droppableId);
+
+  const updatedRoutes =
+    [...manualRoutes];
+
+  const sourceStops =
+    [...updatedRoutes[sourceVehicle]];
+
+  const [movedStop] =
+    sourceStops.splice(
+      result.source.index,
+      1
+    );
+
+  // SAME VEHICLE
+
+  if (
+    sourceVehicle ===
+    destinationVehicle
+  ) {
+
+    sourceStops.splice(
+      result.destination.index,
+      0,
+      movedStop
+    );
+
+    updatedRoutes[sourceVehicle] =
+      sourceStops;
+  }
+
+  // DIFFERENT VEHICLE
+
+  else {
+
+    const destinationStops =
+      [...updatedRoutes[destinationVehicle]];
+
+    destinationStops.splice(
+      result.destination.index,
+      0,
+      movedStop
+    );
+
+    updatedRoutes[sourceVehicle] =
+      sourceStops;
+
+    updatedRoutes[destinationVehicle] =
+      destinationStops;
+  }
+
+  setManualRoutes(updatedRoutes);
+}
 
   // VEHICLE SPLIT
 
@@ -664,27 +778,91 @@ function App() {
     ]);
 
   // OPTIMIZED ROUTES
-    const optimizedRoutes = useMemo(() => {
 
-      return vehicleStops.map(route =>
-        optimizeRoute(
-          [...route],
-          startPoint
-        )
-      );
+      const generatedRouteOptions =
+        useMemo(() => {
 
-    }, [vehicleStops, startPoint]);
+          return [
+
+            {
+              id: "shortest",
+              name: "Shortest",
+              routes: vehicleStops.map(
+                route =>
+                  optimizeRoute(
+                    [...route],
+                    startPoint,
+                    "shortest"
+                  )
+              ),
+            },
+
+            {
+              id: "priority",
+              name: "Priority",
+              routes: vehicleStops.map(
+                route =>
+                  optimizeRoute(
+                    [...route],
+                    startPoint,
+                    "priority"
+                  )
+              ),
+            },
+
+            {
+              id: "balanced",
+              name: "Balanced",
+              routes: vehicleStops.map(
+                route =>
+                  optimizeRoute(
+                    [...route],
+                    startPoint,
+                    "balanced"
+                  )
+              ),
+            },
+
+          ];
+
+        }, [
+          vehicleStops,
+          startPoint,
+        ]);
 
     useEffect(() => {
 
+      const activeRoutes =
+        generatedRouteOptions.find(
+          option =>
+            option.id ===
+            selectedRouteOption
+        )?.routes || [];
+
       setRouteStats(
-        optimizedRoutes.map(() => ({
+        activeRoutes.map(() => ({
           distanceKm: 0,
           timeHrs: 0,
         }))
       );
 
-    }, [optimizedRoutes]);
+    }, [generatedRouteOptions, selectedRouteOption]);
+
+    useEffect(() => {
+
+      const activeRoutes =
+        generatedRouteOptions.find(
+          option =>
+            option.id ===
+            selectedRouteOption
+        )?.routes || [];
+
+      setManualRoutes(activeRoutes);
+
+    }, [
+      generatedRouteOptions,
+      selectedRouteOption
+    ]);
 
   // ANALYTICS
 
@@ -1102,7 +1280,14 @@ function App() {
 
     const exportData = [];
 
-    optimizedRoutes.forEach(
+    (
+      generatedRouteOptions.find(
+        option =>
+          option.id ===
+          selectedRouteOption
+      )?.routes || []
+    ).forEach(
+
       (
         route,
         vehicleIndex
@@ -1422,6 +1607,56 @@ function App() {
 
         </div>
 
+        {/* ROUTE OPTIONS */}
+
+        <div>
+
+          <p className="text-xs uppercase tracking-widest text-slate-500 mb-2">
+            Route Options
+          </p>
+
+          <div className="space-y-2">
+
+            {generatedRouteOptions.map(option => (
+
+              <button
+                key={option.id}
+
+                onClick={() =>
+                  setSelectedRouteOption(option.id)
+                }
+
+                className={`w-full p-4 rounded-2xl text-left transition-all ${
+                  selectedRouteOption === option.id
+                    ? "bg-blue-600"
+                    : "bg-slate-800"
+                }`}
+              >
+
+                <div className="flex items-center justify-between">
+
+                  <div>
+
+                    <div className="font-bold">
+                      {option.name}
+                    </div>
+
+                    <div className="text-sm text-slate-300">
+                      {option.routes.flat().length} stops
+                    </div>
+
+                  </div>
+
+                </div>
+
+              </button>
+
+            ))}
+
+          </div>
+
+        </div>
+
         {/* SUMMARY */}
 
         <div>
@@ -1453,12 +1688,10 @@ function App() {
               <h2 className="text-2xl font-bold mt-1">
                 {
                   routeStats.reduce(
-                      (acc,route) =>
-                        acc + (route?.distanceKm || 0),
-
-                      0
-                    )
-                    .toFixed(2)
+                    (acc, route) =>
+                      acc + (route?.distanceKm || 0),
+                    0
+                  ).toFixed(2)
                 }
                 km
               </h2>
@@ -1473,13 +1706,11 @@ function App() {
 
               <h2 className="text-2xl font-bold mt-1">
                 {
-                  routeStats
-                    .reduce(
-                      (acc,route) =>
-                        acc + (route?.timeHrs || 0),
-                      0
-                    )
-                    .toFixed(2)
+                  routeStats.reduce(
+                    (acc, route) =>
+                      acc + (route?.timeHrs || 0),
+                    0
+                  ).toFixed(2)
                 }
                 hrs
               </h2>
@@ -1502,6 +1733,51 @@ function App() {
 
         </div>
 
+        {/* DRIVER ROUTES */}
+
+        <div className="bg-slate-800 rounded-2xl p-4">
+
+          <p className="text-xs uppercase tracking-widest text-slate-500 mb-3">
+            Driver Stops
+          </p>
+
+          <div className="space-y-4">
+
+            {(generatedRouteOptions.find(
+              option =>
+                option.id ===
+                selectedRouteOption
+            )?.routes || []).map((route, vehicleIndex) => (
+
+              <div
+                key={vehicleIndex}
+                className="bg-slate-900 rounded-xl p-3"
+              >
+
+                <p className="font-bold text-blue-400 mb-2">
+                  Vehicle {vehicleIndex + 1}
+                </p>
+
+                <div className="space-y-1 text-sm">
+
+                  {route.map((stop, stopIndex) => (
+
+                    <div key={stopIndex}>
+                      {stopIndex + 1}. {stop.name}
+                    </div>
+
+                  ))}
+
+                </div>
+
+              </div>
+
+            ))}
+
+          </div>
+
+        </div>
+
         {/* SUGGESTED */}
 
         <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5 shadow-lg">
@@ -1513,6 +1789,119 @@ function App() {
           <h2 className="text-4xl font-bold text-yellow-400 mt-2">
             {suggestedVehicles}
           </h2>
+
+        </div>
+
+
+        {/* DRIVER ROUTES */}
+
+        <div className="bg-slate-800 rounded-2xl p-4">
+
+          <p className="text-xs uppercase tracking-widest text-slate-500 mb-3">
+            Driver Routes
+          </p>
+
+          <DragDropContext
+            onDragEnd={handleDragEnd}
+          >
+
+            <div className="space-y-4">
+
+              {manualRoutes.map(
+                (
+                  route,
+                  vehicleIndex
+                ) => (
+
+                  <Droppable
+                    droppableId={`${vehicleIndex}`}
+                    key={vehicleIndex}
+                  >
+
+                    {(provided) => (
+
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.droppableProps}
+
+                        className="bg-slate-900 rounded-xl p-3"
+                      >
+
+                        <p className="font-bold text-blue-400 mb-3">
+                          Vehicle {vehicleIndex + 1}
+                        </p>
+
+                        <div className="space-y-2">
+
+                          {route.map(
+                            (
+                              stop,
+                              stopIndex
+                            ) => (
+
+                              <Draggable
+                                key={`${vehicleIndex}-${stopIndex}`}
+                                draggableId={`${vehicleIndex}-${stopIndex}`}
+                                index={stopIndex}
+                              >
+
+                                {(provided) => (
+
+                                  <div
+                                    ref={provided.innerRef}
+
+                                    {...provided.draggableProps}
+
+                                    {...provided.dragHandleProps}
+
+                                    className="bg-slate-800 rounded-lg p-3 cursor-move"
+                                  >
+
+                                    <div className="flex justify-between items-center">
+
+                                      <div>
+
+                                        <p className="font-semibold">
+                                          {stop.name}
+                                        </p>
+
+                                        <p className="text-xs text-slate-400">
+                                          {stop.priority}
+                                        </p>
+
+                                      </div>
+
+                                      <div className="text-slate-500">
+                                        ☰
+                                      </div>
+
+                                    </div>
+
+                                  </div>
+
+                                )}
+
+                              </Draggable>
+
+                            )
+                          )}
+
+                          {provided.placeholder}
+
+                        </div>
+
+                      </div>
+
+                    )}
+
+                  </Droppable>
+
+                )
+              )}
+
+            </div>
+
+          </DragDropContext>
 
         </div>
 
@@ -1736,112 +2125,89 @@ function App() {
               </Marker>
             )}
 
-            <RouteMarkers        
-              routes={
-                optimizedRoutes
-              }
-              setStops={
-                setStops
-              }
+
+            <RouteMarkers
+                routes={manualRoutes}
+                setStops={setStops}
             />
+            
 
-            {optimizedRoutes.map((route,index) => {
-                const routePoints = [];
+            {manualRoutes.map((route, index) => {
 
-              
-                // START
+              const routePoints = [];
+
+              if (startPoint) {
+                routePoints.push(startPoint);
+              }
+
+              if (crossDockPoint) {
+                routePoints.push(crossDockPoint);
+              }
+
+              routePoints.push(...route);
+
+              if (roundTrip) {
 
                 if (startPoint) {
 
-                  routePoints.push(
-                    startPoint
-                  );
+                  routePoints.push({
+                    ...startPoint
+                  });
                 }
 
-                // CROSS DOCK
+              } else {
 
-                if (crossDockPoint) {
-
-                  routePoints.push(
-                    crossDockPoint
-                  );
+                if (endPoint) {
+                  routePoints.push(endPoint);
                 }
+              }
 
-                // DELIVERY STOPS
-
-                routePoints.push(
-                  ...route
+              const validRoutePoints =
+                routePoints.filter(
+                  point =>
+                    point &&
+                    typeof point.lat === "number" &&
+                    typeof point.lng === "number"
                 );
 
-                // ROUND TRIP
+              return (
 
-                if (roundTrip) {
+                <ORSRoute
+                  key={index}
 
-                  if (startPoint) {
+                  routePoints={validRoutePoints}
 
-                    routePoints.push({
-                      ...startPoint
-                    });
+                  color={
+                    routeColors[
+                      index %
+                      routeColors.length
+                    ]
                   }
-                }
 
-                // ONE WAY
+                  setLoading={setLoading}
 
-                else {
+                  onRouteCalculated={(stats) => {
 
-                  if (endPoint) {
+                    handleRouteCalculated(
+                      index,
+                      {
+                        distanceKm:
+                          Number(stats.distanceKm),
 
-                    routePoints.push(
-                      endPoint
+                        timeHrs:
+                          Number(stats.timeHrs),
+                      }
                     );
-                  }
-                }
-                const validRoutePoints = routePoints
-                  .filter(
-                    point =>
-                      point &&
-                      typeof point.lat === "number" &&
-                      typeof point.lng === "number" &&
-                      !isNaN(point.lat) &&
-                      !isNaN(point.lng)
-                  );
- 
-                return (
-                  <ORSRoute
-                  
-                    key={`route-${index}`}
-                    routePoints={validRoutePoints}
-                    
-                    color={
-                      routeColors[
-                        index % routeColors.length
-                      ]
-                    }
-                    setLoading={setLoading}
-                    
+                  }}
 
-                    onRouteCalculated={(stats) =>{
-                      
-                      handleRouteCalculated(
-                        index,
-        
-                        {
-                          distanceKm:
-                            Number(stats.distanceKm),
+                />
 
-                          timeHrs:
-                            Number(stats.timeHrs),
-                        }
-                      )
-                    }
-                  }
-                  />
+              );
 
-                );
-              })}
+            })}
 
 
-          </MapContainer>
+              </MapContainer>
 
         </div>
 
