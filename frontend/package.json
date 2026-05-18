@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
+    "@supabase/supabase-js": "^2.105.4",
     "@tailwindcss/vite": "^4.2.4",
     "file-saver": "^2.0.5",
     "leaflet": "^1.9.4",

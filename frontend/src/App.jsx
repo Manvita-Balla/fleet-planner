@@ -33,6 +33,8 @@ import {
   Draggable,
 } from "@hello-pangea/dnd";
 
+import { supabase } from "./supabase";
+
 // ROUTE COLORS
 
 const routeColors = [
@@ -276,73 +278,6 @@ function clusterStopsIntoVehicles(
   return vehicles;
 }
 
-
-
-// MAP CLICK
-
-function MapClickHandler({
-  mode,
-  priority,
-  setStartPoint,
-  setEndPoint,
-  setStops,
-  setCrossDockPoint,
-  roundTrip,
-}) {
-
-  useMapEvents({
-    click(e) {
-
-      const point = {
-
-        lat:
-          e.latlng.lat,
-
-        lng:
-          e.latlng.lng,
-
-        priority,
-
-        name:
-          `Point ${Date.now()}`,
-      };
-
-      if (
-        mode === "start"
-      ) {
-
-        setStartPoint(point);
-
-      }
-
-      else if (
-        mode === "end" &&
-        !roundTrip
-      ) {
-
-        setEndPoint(point);
-
-      }
-      else if (
-        mode === "crossdock"
-      ) {
-
-        setCrossDockPoint(point);
-      }
-
-      else {
-
-        setStops(prev => [
-          ...prev,
-          point,
-        ]);
-      }
-    },
-  });
-
-  return null;
-}
-
 // MARKERS
 
 function RouteMarkers({
@@ -417,6 +352,21 @@ function RouteMarkers({
                       </strong>
                       {" "}
                       {stop.name || "Unknown"}
+                    </p>
+                    <p>
+                      <strong>
+                        Latitude:
+                      </strong>
+                      {" "}
+                      {stop.lat.toFixed(6)}
+                    </p>
+
+                    <p>
+                      <strong>
+                        Longitude:
+                      </strong>
+                      {" "}
+                      {stop.lng.toFixed(6)}
                     </p>
 
                     <button
@@ -658,33 +608,38 @@ function App() {
     setVehicleCount,
   ] = useState(2);
   const [
-  routeStats,
-  setRouteStats,
+    routeStats,
+    setRouteStats,
   ] = useState([]);
   const [
-  roundTrip,
-  setRoundTrip,
+    roundTrip,
+    setRoundTrip,
   ] = useState(false);
 
   const [
-  loading, 
-  setLoading,
+    loading, 
+    setLoading,
   ] = useState(false);
 
   const [
-  routeOptions,
-  setRouteOptions,
+    manualRoutes,
+    setManualRoutes,
   ] = useState([]);
 
   const [
-  selectedRouteOption,
-  setSelectedRouteOption,
+    optimizationMode,
+    setOptimizationMode,
   ] = useState("shortest");
 
   const [
-  manualRoutes,
-  setManualRoutes,
+    savedRoutes,
+    setSavedRoutes,
   ] = useState([]);
+
+  const [
+    routeName,
+    setRouteName,
+  ] = useState("");
 
 function handleDragEnd(result) {
 
@@ -779,90 +734,32 @@ function handleDragEnd(result) {
 
   // OPTIMIZED ROUTES
 
-      const generatedRouteOptions =
-        useMemo(() => {
+    function generateOptimizedRoutes() {
 
-          return [
+      if (!routeName.trim()) {
 
-            {
-              id: "shortest",
-              name: "Shortest",
-              routes: vehicleStops.map(
-                route =>
-                  optimizeRoute(
-                    [...route],
-                    startPoint,
-                    "shortest"
-                  )
-              ),
-            },
+        setRouteName(
+          `Route ${new Date().toLocaleTimeString()}`
+        );
+      }
 
-            {
-              id: "priority",
-              name: "Priority",
-              routes: vehicleStops.map(
-                route =>
-                  optimizeRoute(
-                    [...route],
-                    startPoint,
-                    "priority"
-                  )
-              ),
-            },
+      const optimized =
+        vehicleStops.map(route =>
+          optimizeRoute(
+            [...route],
+            startPoint,
+            optimizationMode
+          )
+        );
 
-            {
-              id: "balanced",
-              name: "Balanced",
-              routes: vehicleStops.map(
-                route =>
-                  optimizeRoute(
-                    [...route],
-                    startPoint,
-                    "balanced"
-                  )
-              ),
-            },
-
-          ];
-
-        }, [
-          vehicleStops,
-          startPoint,
-        ]);
+      setManualRoutes(optimized);
+    }
 
     useEffect(() => {
 
-      const activeRoutes =
-        generatedRouteOptions.find(
-          option =>
-            option.id ===
-            selectedRouteOption
-        )?.routes || [];
+      loadSavedRoutes();
 
-      setRouteStats(
-        activeRoutes.map(() => ({
-          distanceKm: 0,
-          timeHrs: 0,
-        }))
-      );
-
-    }, [generatedRouteOptions, selectedRouteOption]);
-
-    useEffect(() => {
-
-      const activeRoutes =
-        generatedRouteOptions.find(
-          option =>
-            option.id ===
-            selectedRouteOption
-        )?.routes || [];
-
-      setManualRoutes(activeRoutes);
-
-    }, [
-      generatedRouteOptions,
-      selectedRouteOption
-    ]);
+    }, []);
 
   // ANALYTICS
 
@@ -900,7 +797,53 @@ function handleDragEnd(result) {
     );
 
   // ADD LOCATION
+  async function saveRoutePlan() {
 
+    const routeData = {
+
+      routes: manualRoutes,
+
+      startPoint,
+
+      endPoint,
+
+      crossDockPoint,
+
+      roundTrip,
+
+      vehicleCount,
+
+    };
+
+    const { error } = await supabase
+      .from("routes")
+      .insert([
+        {
+          name:
+            routeName.trim() ||
+            `Route ${Date.now()}`,
+
+          routes:
+            JSON.stringify(routeData),
+
+          vehicle_count:
+            vehicleCount,
+        },
+      ]);
+
+    if (error) {
+
+      console.error(error);
+
+      alert("Save failed");
+
+      return;
+    }
+
+    alert("Routes saved successfully");
+    setRouteName("");
+    loadSavedRoutes();
+  }
   async function addLocation() {
 
     if (!location) return;
@@ -1280,14 +1223,7 @@ function handleDragEnd(result) {
 
     const exportData = [];
 
-    (
-      generatedRouteOptions.find(
-        option =>
-          option.id ===
-          selectedRouteOption
-      )?.routes || []
-    ).forEach(
-
+    manualRoutes.forEach(
       (
         route,
         vehicleIndex
@@ -1301,11 +1237,17 @@ function handleDragEnd(result) {
 
             exportData.push({
 
+              RouteName:
+                routeName,
+
               Vehicle:
                 vehicleIndex + 1,
 
               StopOrder:
                 stopIndex + 1,
+
+              StopName:
+                stop.name,
 
               Latitude:
                 stop.lat,
@@ -1377,6 +1319,23 @@ function handleDragEnd(result) {
 
     []
   );
+  async function loadSavedRoutes() {
+
+    const { data, error } =
+      await supabase
+        .from("routes")
+        .select("*")
+        .order("created_at", {
+          ascending: false,
+        });
+
+    if (error) {
+      console.error(error);
+      return;
+    }
+
+    setSavedRoutes(data || []);
+  }
 
   return (
 
@@ -1607,53 +1566,40 @@ function handleDragEnd(result) {
 
         </div>
 
-        {/* ROUTE OPTIONS */}
-
         <div>
 
           <p className="text-xs uppercase tracking-widest text-slate-500 mb-2">
-            Route Options
+            Optimization Mode
           </p>
 
-          <div className="space-y-2">
+          <select
+            value={optimizationMode}
+            onChange={(e) =>
+              setOptimizationMode(
+                e.target.value
+              )
+            }
 
-            {generatedRouteOptions.map(option => (
+            className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-3"
+          >
 
-              <button
-                key={option.id}
+            <option value="shortest">
+              Shortest
+            </option>
 
-                onClick={() =>
-                  setSelectedRouteOption(option.id)
-                }
+            <option value="priority">
+              Priority
+            </option>
 
-                className={`w-full p-4 rounded-2xl text-left transition-all ${
-                  selectedRouteOption === option.id
-                    ? "bg-blue-600"
-                    : "bg-slate-800"
-                }`}
-              >
+            <option value="balanced">
+              Balanced
+            </option>
 
-                <div className="flex items-center justify-between">
+            <option value="fastest">
+              Fastest
+            </option>
 
-                  <div>
-
-                    <div className="font-bold">
-                      {option.name}
-                    </div>
-
-                    <div className="text-sm text-slate-300">
-                      {option.routes.flat().length} stops
-                    </div>
-
-                  </div>
-
-                </div>
-
-              </button>
-
-            ))}
-
-          </div>
+          </select>
 
         </div>
 
@@ -1743,11 +1689,7 @@ function handleDragEnd(result) {
 
           <div className="space-y-4">
 
-            {(generatedRouteOptions.find(
-              option =>
-                option.id ===
-                selectedRouteOption
-            )?.routes || []).map((route, vehicleIndex) => (
+            {manualRoutes.map((route, vehicleIndex) => (
 
               <div
                 key={vehicleIndex}
@@ -1905,12 +1847,115 @@ function handleDragEnd(result) {
 
         </div>
 
+        {routeName && (
+          <p className="text-sm text-cyan-400 mt-1">
+            Current Route: {routeName}
+          </p>
+        )}
+                
+        {/* SAVED ROUTES */}
+
+        <div className="bg-slate-800 rounded-2xl p-4">
+
+          <p className="text-xs uppercase tracking-widest text-slate-500 mb-3">
+            Saved Routes
+          </p>
+
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+
+            {savedRoutes.map((route) => (
+
+              <div
+                key={route.id}
+                className="bg-slate-900 p-3 rounded-xl"
+              >
+
+                <p className="font-semibold">
+                  {route.name}
+                </p>
+
+                <p className="text-xs text-slate-400">
+                  Vehicles: {route.vehicle_count}
+                </p>
+
+                <button
+                  onClick={() => {
+
+                    const parsed =
+                      JSON.parse(route.routes);
+
+                    setManualRoutes(
+                      parsed.routes || []
+                    );
+
+                    setStartPoint(
+                      parsed.startPoint || null
+                    );
+
+                    setEndPoint(
+                      parsed.endPoint || null
+                    );
+
+                    setCrossDockPoint(
+                      parsed.crossDockPoint || null
+                    );
+
+                    setRoundTrip(
+                      parsed.roundTrip || false
+                    );
+
+                    setVehicleCount(
+                      parsed.vehicleCount || 1
+                    );
+
+                  }}
+
+                  className="mt-2 w-full bg-blue-600 hover:bg-blue-700 rounded-lg py-2 text-sm"
+                >
+                  Load Route
+                </button>
+
+              </div>
+
+            ))}
+
+          </div>
+
+        </div>
+
+        {/* ROUTE NAME */}
+
+        <div>
+
+          <p className="text-xs uppercase tracking-widest text-slate-500 mb-2">
+            Route Name
+          </p>
+
+          <input
+            type="text"
+            placeholder="Enter route name"
+
+            value={routeName}
+
+            onChange={(e) =>
+              setRouteName(
+                e.target.value
+              )
+            }
+
+            className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-3"
+          />
+
+        </div>
+
         {/* ACTIONS */}
 
         <div className="space-y-3">
           
           <button
             onClick={() => {
+
+              generateOptimizedRoutes();
 
               setLoading(true);
 
@@ -1921,7 +1966,8 @@ function handleDragEnd(result) {
               }, 1000);
 
             }}
-                        className="w-full bg-green-600 hover:bg-green-700 rounded-2xl py-4 font-bold"
+
+            className="w-full bg-green-600 hover:bg-green-700 rounded-2xl py-4 font-bold"
           >
             Generate Route
           </button>
@@ -1945,6 +1991,7 @@ function handleDragEnd(result) {
               );
 
               setStops([]);
+              setManualRoutes([]);
               setCrossDockPoint(
                 null
               );
@@ -1954,9 +2001,18 @@ function handleDragEnd(result) {
             Clear Routes
           </button>
 
+          <button
+            onClick={saveRoutePlan}
+            className="w-full bg-cyan-600 hover:bg-cyan-700 rounded-2xl py-4 font-bold"
+          >
+            Save Route Plan
+          </button>
+
         </div>
 
       </div>
+
+
       
 
       {/* MAP */}
@@ -1966,6 +2022,22 @@ function handleDragEnd(result) {
           <div className="absolute top-5 right-5 z-[9999] bg-black/80 text-white px-5 py-3 rounded-2xl shadow-2xl border border-slate-700">
             Optimizing Route...
           </div>
+        )}
+
+        {routeName && (
+
+          <div className="absolute top-5 left-5 z-[9999] bg-slate-900/90 text-white px-5 py-3 rounded-2xl border border-slate-700 shadow-xl">
+
+            <p className="text-xs text-slate-400">
+              Active Route
+            </p>
+
+            <h2 className="font-bold text-cyan-400">
+              {routeName}
+            </h2>
+
+          </div>
+
         )}
 
         <div className="h-full w-full rounded-3xl overflow-hidden shadow-2xl">
@@ -1988,19 +2060,6 @@ function handleDragEnd(result) {
 
             />
             <FixMapSize />
-
-
-            <MapClickHandler
-                mode={mode}
-                priority={priority}
-                roundTrip={roundTrip}
-                setStartPoint={setStartPoint}
-                setEndPoint={setEndPoint}
-                setCrossDockPoint={
-                  setCrossDockPoint
-                }
-                setStops={setStops} 
-            />
 
             {crossDockPoint && (
 
@@ -2179,7 +2238,7 @@ function handleDragEnd(result) {
 
                   color={
                     routeColors[
-                      index %
+                      index % 
                       routeColors.length
                     ]
                   }
